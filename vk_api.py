@@ -22,6 +22,7 @@ VK_API_RPS_LIMIT = 5  # limit of requests per seconds
 # Authentication Option 1:
 #   1. Insert an access token in VK_API_TOKEN (example: vk1.a.abcde... [198 symbols])
 VK_API_TOKEN = ''  # INSERT_YOUR_API_TOKEN_from_generated_OAUTH_URL
+VK_API_RESERVE_TOKENS = []  # additional reserve API tokens
 # Authentication Option 2:
 #   1. Leave VK_API_TOKEN empty, insert VK_APP_SCOPE, VK_APP_ID (or don't change them to get full permissions)
 #   2. Follow the instructions when executing script to obtain token
@@ -42,6 +43,7 @@ class VK:
             app_id: str | int = '',  # VK App ID
             app_scope: str = '',  # VK App scope
             api_token: str = '',  # VK API token
+            api_tokens_reserve: list = [],  # VK API reserve tokens
             api_version: str = '',  # VK API version
             api_rps_limit: int = 5,  # VK API limit of requests per second
     ) -> None:
@@ -53,23 +55,49 @@ class VK:
         self._uuid = str(uuid.uuid4())
         self._api_rps_limit = 1 / api_rps_limit
         self._time_last_request = 0.0
+        self._api_tokens_reserve = api_tokens_reserve
         if api_token:
             self._api_token = api_token
-        else:
+        elif not self._get_reserve_token():
             self._api_token = self._get_access_token_by_url()
 
-    def _make_request(self, url: str, params: dict) -> requests.Response:
+    def _get_reserve_token(self) -> bool:
+        """Get next reserve token"""
+        if self._api_tokens_reserve:
+            self._api_token = self._api_tokens_reserve.pop(0)
+            return True
+
+        return False
+
+    def _make_request(self, url: str, params: dict) -> tuple[requests.Response, dict]:
         """Make request for VK API"""
+        # make time delay for keep within RPS
         delay = self._api_rps_limit + self._time_last_request - time.time()
         if delay > 0:
             time.sleep(delay)
 
-        response = requests.get(url, params=params)
+        while True:
+            if params.get('access_token', ''):
+                params['access_token'] = self._api_token  # set last api_token
+            response = requests.get(url, params=params)
+            try:
+                data = response.json()
+            except Exception:
+                data = {}
+
+            error_code = data.get('error', 0)
+            if isinstance(error_code, dict):
+                error_code = error_code.get('error_code', 0)
+            if error_code == 5:  # user authorization failed
+                if not self._get_reserve_token():
+                    break
+            else:
+                break
 
         self._time_last_request = time.time()
-        return response
+        return response, data
 
-    def _get_access_token_by_url(self) -> str | None:
+    def _get_access_token_by_url(self) -> str:
         """Get API access token by generated URL"""
         params = {
             'client_id': self._app_id,
@@ -80,8 +108,7 @@ class VK:
             'v': self._api_version,
         }
 
-        response = self._make_request(self._oauth_url + 'authorize', params)
-        data = response.json()
+        response, data = self._make_request(self._oauth_url + 'authorize', params)
         if response.status_code == 200 and not data.get('error', ''):
             print(f"Open this page in your browser when you login in your vk account:\n{response.url}")
             url = input(f"Copy new URL from browser and paste here: ")
@@ -98,8 +125,9 @@ class VK:
                       "\nPress any key to continue...")
             return token
         print("Error!!! Failed to obtain access token:", response.status_code, data.get('error', ''))
+        return ''
 
-    def get_id_user_groups(self, user_id: int) -> list[int] | None:
+    def get_id_user_groups(self, user_id: int) -> list[int]:
         """Get user's groups IDs by userID"""
         params = {
             'access_token': self._api_token,
@@ -107,14 +135,14 @@ class VK:
             'user_id': user_id,
         }
 
-        response = self._make_request(self._api_ulr + 'groups.get', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'groups.get', params)
         if response.status_code == 200 and not data.get('error', ''):
             groups = data.get('response', {}).get('items', [])
             return groups
         print("Error!!! Failed to get user's groups IDs:", response.status_code, data.get('error', ''))
+        return []
 
-    def get_users_by_query(self, query: str, count: int = 10) -> list[dict] | None:
+    def get_users_by_query(self, query: str, count: int = 10) -> list[dict]:
         """Get users by query"""
         params = {
             'access_token': self._api_token,
@@ -123,14 +151,14 @@ class VK:
             'q': query,
             'sort': 0,  # 0 - by popular, 1 - by date of registration
         }
-        response = self._make_request(self._api_ulr + 'users.search', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'users.search', params)
         if response.status_code == 200 and not data.get('error', ''):
             users = data.get('response', {}).get('items', [])
             return users
         print("Error!!! Failed to get users by query:", response.status_code, data.get('error', ''))
+        return []
 
-    def get_groups_by_query(self, query: str, count: int = 10) -> list[dict] | None:
+    def get_groups_by_query(self, query: str, count: int = 10) -> list[dict]:
         """Get groups by query"""
         params = {
             'access_token': self._api_token,
@@ -139,43 +167,44 @@ class VK:
             'q': query,
             'sort': 0,  # 0 - equals vk.com, 6 - by followers count
         }
-        response = self._make_request(self._api_ulr + 'groups.search', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'groups.search', params)
         if response.status_code == 200 and not data.get('error', ''):
             groups = data.get('response', {}).get('items', [])
             return groups
         print("Error!!! Failed to get groups by query:", response.status_code, data.get('error', ''))
+        # return []
+        return [{'qwewe': 666}]
 
-    def get_user_friends(self, user_id: int) -> list[int] | None:
+    def get_user_friends(self, user_id: int) -> list[int]:
         """Get user's friends IDs by userID"""
         params = {
             'access_token': self._api_token,
             'v': self._api_version,
             'user_id': user_id,
         }
-        response = self._make_request(self._api_ulr + 'friends.get', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'friends.get', params)
         if response.status_code == 200 and not data.get('error', ''):
             friends = data.get('response', {}).get('items', [])
             return friends
         print("Error!!! Failed to get user's friends IDs:", response.status_code, data.get('error', ''))
+        # return []
 
-    def get_users_ids(self, screen_names: list[str | int]) -> list[int] | None:
+    def get_users_ids(self, screen_names: list[str | int]) -> list[int]:
         """Get user's ID's by screen_names/IDs"""
         params = {
             'access_token': self._api_token,
             'v': self._api_version,
             'user_ids': ",".join(map(str, screen_names)),
         }
-        response = self._make_request(self._api_ulr + 'users.get', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'users.get', params)
         if response.status_code == 200 and not data.get('error', ''):
             users = data.get('response', {})
-            users_ids = [user.get('id', None) for user in users]
+            users_ids = [user.get('id') for user in users if user.get('id', None)]
             return users_ids
         print("Error!!! Failed to get user's IDs by screen names:", response.status_code, data.get('error', ''))
+        # return []
 
-    def get_users_info(self, screen_names: list[str | int]) -> list[dict] | None:
+    def get_users_info(self, screen_names: list[str | int]) -> list[dict]:
         """Get user's info by screen_names/IDs"""
         params = {
             'access_token': self._api_token,
@@ -191,33 +220,31 @@ class VK:
                       'nickname,occupation,online,personal,photo_100,photo_200,photo_200_orig,photo_400_orig,'
                       'photo_50,photo_id,photo_max,photo_max_orig,quotes,relation,relatives,schools,screen_name,'
                       'sex,site,status,timezone,trending,tv,universities,verified,wall_default'
-
         }
-        response = self._make_request(self._api_ulr + 'users.get', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'users.get', params)
         if response.status_code == 200 and not data.get('error', ''):
             users = data.get('response', {})
             users_info = [{key: value for key, value in user.items() if value} for user in users]
             return users_info
         print("Error!!! Failed to get user's info by screen names:", response.status_code, data.get('error', ''))
+        # return []
 
-    def get_groups_ids(self, screen_names: list[str | int]) -> list[dict] | None:
+    def get_groups_ids(self, screen_names: list[str | int]) -> list[dict]:
         """Get groups IDs by screen names/IDs"""
         params = {
             'access_token': self._api_token,
             'v': self._api_version,
             'group_ids': ",".join(map(str, screen_names)),
-
         }
-        response = self._make_request(self._api_ulr + 'groups.getById', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'groups.getById', params)
         if response.status_code == 200 and not data.get('error', ''):
             groups = data.get('response', {}).get('groups', {})
-            groups_ids = [group.get('id', None) for group in groups]
+            groups_ids = [group.get('id') for group in groups if group.get('id', None)]
             return groups_ids
         print("Error!!! Failed to get groups IDs by screen names:", response.status_code, data.get('error', ''))
+        # return []
 
-    def get_groups_info(self, screen_names: list[str | int]) -> list[dict] | None:
+    def get_groups_info(self, screen_names: list[str | int]) -> list[dict]:
         """Get groups info by screen_names/IDs"""
         params = {
             'access_token': self._api_token,
@@ -228,17 +255,16 @@ class VK:
                       'country,cover,crop_photo,description,fixed_post,has_photo,is_favorite,is_hidden_from_feed,'
                       'is_messages_blocked,links,main_album_id,main_section,market,member_status,members_count,'
                       'place,public_date_label,site,start_date,finish_date,status,trending,verified,wall,wiki_page'
-
         }
-        response = self._make_request(self._api_ulr + 'groups.getById', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'groups.getById', params)
         if response.status_code == 200 and not data.get('error', ''):
             groups = data.get('response', {}).get('groups', {})
             groups_info = [{key: value for key, value in group.items() if value} for group in groups]
             return groups_info
         print("Error!!! Failed to get groups info by screen names:", response.status_code, data.get('error', ''))
+        # return []
 
-    def get_posts_info(self, screen_name: str | int, count: int = 30, is_user: bool = True) -> list[dict] | None:
+    def get_posts_info(self, screen_name: str | int, count: int = 30, is_user: bool = True) -> list[dict]:
         """Get posts in user's/group's wall"""
         # Important! If the post contains a link to another user (#user) or url,
         # then in the response it will be presented in the following form: [id123456|user] or [url|user].
@@ -250,14 +276,13 @@ class VK:
             'domain': screen_name if isinstance(screen_name, str) else '',
             'count': count,
             'filter': 'all',  # (suggests, postponed, owner, others, all, donut)
-
         }
-        response = self._make_request(self._api_ulr + 'wall.get', params)
-        data = response.json()
+        response, data = self._make_request(self._api_ulr + 'wall.get', params)
         if response.status_code == 200 and not data.get('error', ''):
             posts = data.get('response', {}).get('items', {})
             return posts
         print("Error!!! Failed to get posts in user's/group's wall:", response.status_code, data.get('error', ''))
+        # return []
 
     @staticmethod
     def get_field_from_data(data: list[dict], field: str,
@@ -266,7 +291,8 @@ class VK:
                             ) -> list:
         """Return one field from a list of data"""
         data_fields = [item.get(field) for item in data
-                       if filter_field_allowing == item.get(filter_field, filter_field_allowing)]
+                       if item.get(field, None)
+                       and filter_field_allowing == item.get(filter_field, filter_field_allowing)]
         return data_fields
 
 
@@ -294,6 +320,7 @@ if __name__ == "__main__":
         api_version=VK_API_VERSION,
         api_rps_limit=VK_API_RPS_LIMIT,
         api_token=VK_API_TOKEN,
+        api_tokens_reserve=VK_API_RESERVE_TOKENS,
         app_id=VK_APP_ID,
         app_scope=VK_APP_SCOPE,
     )
