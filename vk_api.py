@@ -27,9 +27,10 @@ VK_API_RESERVE_TOKENS = []  # additional reserve API tokens
 #   1. Leave VK_API_TOKEN empty, insert VK_APP_SCOPE, VK_APP_ID (or don't change them to get full permissions)
 #   2. Follow the instructions when executing script to obtain token
 VK_APP_ID = ''  # INSERT_YOUR_APP_ID_from_VK_ACCOUNT
-VK_APP_SCOPE = 'ads,audio,docs,email,friends,groups,market,menu,messages,notes,notifications,notify,pages,' \
-               'phone_number,photos,stats,status,stories,video,wall,' \
-               'offline'  # These are all possible scopes. You can choose only you need. offline - for non expires token
+VK_APP_SCOPE = 'friends,groups'
+               #'ads,audio,docs,email,friends,groups,market,menu,messages,notes,notifications,notify,pages,' \
+               #'phone_number,photos,stats,status,stories,video,wall,' \
+               #'offline'  # These all possible scopes. You can choose only you need. offline - for non expires token
 
 
 class VK:
@@ -101,7 +102,7 @@ class VK:
         """Get API access token by generated URL"""
         params = {
             'client_id': self._app_id,
-            ' scope': self._app_scope,
+            'scope': self._app_scope,
             'redirect_uri': self._oauth_url + 'blank.html',
             'display': 'page',
             'response_type': 'token',
@@ -142,8 +143,8 @@ class VK:
         print("Error!!! Failed to get user's groups IDs:", response.status_code, data.get('error', ''))
         return []
 
-    def get_users_by_query(self, query: str, count: int = 10) -> list[dict]:
-        """Get users by query"""
+    def get_users_ids_by_query(self, query: str, count: int = 10) -> list[dict]:
+        """Get users IDs by query"""
         params = {
             'access_token': self._api_token,
             'v': self._api_version,
@@ -158,8 +159,8 @@ class VK:
         print("Error!!! Failed to get users by query:", response.status_code, data.get('error', ''))
         return []
 
-    def get_groups_by_query(self, query: str, count: int = 10) -> list[dict]:
-        """Get groups by query"""
+    def get_groups_ids_by_query(self, query: str, count: int = 10) -> list[dict]:
+        """Get groups IDs by query"""
         params = {
             'access_token': self._api_token,
             'v': self._api_version,
@@ -168,6 +169,23 @@ class VK:
             'sort': 0,  # 0 - equals vk.com, 6 - by followers count
         }
         response, data = self._make_request(self._api_ulr + 'groups.search', params)
+        if response.status_code == 200 and not data.get('error', ''):
+            groups = data.get('response', {}).get('items', [])
+            return groups
+        print("Error!!! Failed to get groups by query:", response.status_code, data.get('error', ''))
+        return []
+
+    def get_groups_users_by_query(self, query: str, count: int = 10, filters: str = '') -> list[dict]:
+        """Get search (groups, users) by query"""
+        params = {
+            'access_token': self._api_token,
+            'v': self._api_version,
+            'limit': count,
+            'q': query,
+            'filters': filters,  # 'groups' - only groups, '' - return users and groups
+            'search_global': 1,  # 0 - only your account, 1 - global
+        }
+        response, data = self._make_request(self._api_ulr + 'search.getHints', params)
         if response.status_code == 200 and not data.get('error', ''):
             groups = data.get('response', {}).get('items', [])
             return groups
@@ -327,11 +345,19 @@ if __name__ == "__main__":
     # search groups by query
     core_for_search = input("Input a search term to find communities: ")
     if core_for_search:
-        groups = vk_api.get_groups_by_query(core_for_search)
+        # search groups and users by query - variant 1
+        # search = vk_api.get_groups_users_by_query(core_for_search)
+        # groups = VK.get_field_from_data(search, 'group')
+        # groups_ids = VK.get_field_from_data(groups, 'id', 'is_closed', False)
+        # users = VK.get_field_from_data(search, 'profile')
+        # users_ids = VK.get_field_from_data(users, 'id', 'is_closed', False)
+
+        # search groups by query - variant 2
+        groups = vk_api.get_groups_ids_by_query(core_for_search)
         groups_ids = VK.get_field_from_data(groups, 'id', 'is_closed', False)
 
-        # search users by query
-        users = vk_api.get_users_by_query(core_for_search)
+        # search users by query - variant 2
+        users = vk_api.get_users_ids_by_query(core_for_search)
         users_ids = VK.get_field_from_data(users, 'id', 'is_closed', False)
     else:
         groups_ids = ['vk', 'dedmoroz']
