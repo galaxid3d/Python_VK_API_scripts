@@ -3,6 +3,7 @@
 import time
 import requests
 import uuid
+import re
 
 """
 Algorithm for registering your VK-application (for working with the API):
@@ -281,7 +282,8 @@ class VK:
         print("Error!!! Failed to get groups info by screen names:", response.status_code, data.get('error', ''))
         return []
 
-    def get_posts_info(self, screen_name: str | int, count: int = 30, is_user: bool = True) -> list[dict]:
+    def get_posts_info(self, screen_name: str | int, count: int = 30, is_user: bool = True,
+                       is_hypertext: bool = True) -> list[dict]:
         """Get posts in user's/group's wall"""
         # Important! If the post contains a link to another user (#user) or url,
         # then in the response it will be presented in the following form: [id123456|user] or [url|user].
@@ -330,6 +332,16 @@ if __name__ == "__main__":
         now_time = datetime.datetime.now()
         time_delta = datetime.timedelta(month_amount * 365 / 12)
         return post_time + time_delta >= now_time
+
+    def remove_hypertext(text: str) -> str:
+        """Remove from post url-links, hypertext"""
+        # delete VK-post's hypertext: [...|...]
+        clear_text = re.sub(r'\[[^\[\|\]]+\|[^\[\|\]]+\]', '', text)
+        # delete url-links
+        clear_text = re.sub(
+            r'(http://|https://|www.)(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+            '', clear_text)
+        return clear_text
 
     vk_api = VK(
         api_url=VK_API_URL,
@@ -383,7 +395,7 @@ if __name__ == "__main__":
 
         posts = vk_api.get_posts_info(user, count=30, is_user=is_user)
         if posts:
-            filtered_posts = [post.get('text', '') for post in posts
+            filtered_posts = [remove_hypertext(post.get('text', '')) for post in posts
                               if check_post_by_symbols_amount(post, SYMBOLS_AMOUNT)
                               and check_post_by_date_amount(post, MONTH_AMOUNT)
                               and not post.get('is_pinned', 0)]
